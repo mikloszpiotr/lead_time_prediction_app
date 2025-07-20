@@ -2,42 +2,58 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from utils.preprocessing import load_scaler, preprocess_input
-from utils.modeling import load_model, predict
+from utils.modeling import train_models, evaluate_model, predict
+from utils.preprocessing import preprocess_input
 
 st.set_page_config(page_title="Lead Time Prediction", layout="wide")
 st.title("🚚 Lead Time Prediction Dashboard")
 
 st.markdown("""
 Predict supplier lead time using historical and macroeconomic data.
-Compare KNN and Random Forest models using MAE and RMSE metrics.
+Compare KNN and Random Forest models trained on-the-fly using uploaded CSV data.
 """)
 
-# Show model performance metrics
-st.subheader("📊 Model Evaluation Metrics (on test set)")
-metrics_df = pd.read_csv("data/model_metrics.csv")
-st.dataframe(metrics_df)
-
-# Plot comparison bar chart
-fig, ax = plt.subplots(figsize=(6, 4))
-metrics_df.plot(x="Model", y=["MAE", "RMSE"], kind="bar", ax=ax)
-plt.title("Model Error Comparison")
-plt.ylabel("Error")
-st.pyplot(fig)
-
-# Model selection and prediction
-st.subheader("🧠 Predict Lead Time")
-model_choice = st.selectbox("Choose Model", options=["knn", "rf"], format_func=lambda x: "KNN" if x=="knn" else "Random Forest")
-
-uploaded_file = st.file_uploader("📤 Upload Supplier Data CSV", type=["csv"])
+uploaded_file = st.file_uploader("📤 Upload Historical Supplier Lead Time CSV", type=["csv"])
 if uploaded_file:
-    input_df = pd.read_csv(uploaded_file)
-    st.write("✅ Uploaded Data Preview", input_df.head())
+    data = pd.read_csv(uploaded_file)
 
-    model = load_model(model_choice)
-    scaler = load_scaler()
-    X_scaled = preprocess_input(input_df, scaler)
-    predictions = predict(model, X_scaled)
+    # Check required columns
+    expected_cols = {"supplier_id", "product_category", "region", "historical_mean_lead_time", "macro_indicator", "lead_time"}
+    if not expected_cols.issubset(set(data.columns)):
+        st.error(f"❌ Uploaded CSV must contain columns: {expected_cols}")
+    else:
+        st.write("✅ Uploaded Data Preview", data.head())
 
-    input_df[f"Predicted Lead Time ({model_choice.upper()})"] = predictions
-    st.write("📈 Predictions", input_df)
+        # Train models and evaluate
+        models, scaler, test_set = train_models(data)
+        X_test, y_test = test_set["X_test"], test_set["y_test"]
+
+        metrics = {"Model": [], "MAE": [], "RMSE": []}
+        for name, model in models.items():
+            mae, rmse = evaluate_model(model, X_test, y_test)
+            metrics["Model"].append("KNN" if name == "knn" else "Random Forest")
+            metrics["MAE"].append(mae)
+            metrics["RMSE"].append(rmse)
+
+        metrics_df = pd.DataFrame(metrics)
+        st.subheader("📊 Model Evaluation Metrics (on uploaded dataset)")
+        st.dataframe(metrics_df)
+
+        fig, ax = plt.subplots()
+        metrics_df.plot(x="Model", y=["MAE", "RMSE"], kind="bar", ax=ax)
+        st.pyplot(fig)
+
+        # Choose model for prediction
+        st.subheader("🧠 Predict New Lead Times")
+        model_choice = st.selectbox("Choose model for prediction", options=["knn", "rf"], format_func=lambda x: "KNN" if x == "knn" else "Random Forest")
+        new_file = st.file_uploader("📤 Upload New Supplier Data (Without Lead Time)", type=["csv"], key="new_data")
+
+        if new_file:
+            new_data = pd.read_csv(new_file)
+            st.write("📄 New Data Preview", new_data.head())
+
+            input_scaled = preprocess_input(new_data, scaler)
+            predictions = predict(models[model_choice], input_scaled)
+
+            new_data["Predicted Lead Time"] = predictions
+            st.write("📈 Predictions", new_data)
